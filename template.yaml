@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: This template is partially managed by Amazon.Lambda.Annotations (v1.6.1.0).
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: dotnet8
+    Architectures:
+      - x86_64
+    MemorySize: 512
+Mappings:
+  AccountMap:
+    '524429825864':
+      VpcId: vpc-0d031dac5c842a40b
+      Environment: DEV
+    "043165574600":
+      VpcId: vpc-02c0dce129da51b1f
+      Environment: STAGING
+    "265496604514":
+      VpcId: vpc-012164d86e62c4255
+      Environment: PROD
+Resources:
+  UrlShortenerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ShortenedUrlTable
+      AttributeDefinitions:
+        - AttributeName: slug
+          AttributeType: S
+      KeySchema:
+        - AttributeName: slug
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiry_date
+        Enabled: true
+  UrlShortenerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: UrlShortenerSecurityGroup
+      GroupDescription: Security group for URL Shortener Lambda functions
+      VpcId: !FindInMap [AccountMap, !Ref 'AWS::AccountId', VpcId]
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Outbound HTTPS access
+  UrlShortenerDynamoDBAccess:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: UrlShortenerDynamoDBAccess
+      Description: Allows Lambda functions to interact with the DynamoDB table
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:DeleteItem
+            Resource: !GetAtt UrlShortenerTable.Arn
+  UrlShortenerConfigAccess:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: UrlShortenerConfigAccess
+      Description: Allows Url Shortener Lambda functions to read configuration from SSM
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/service/urlshortener/config
+          - Action:
+              - ssm:DescribeParameters
+            Effect: Allow
+            Resource: '*'
+  UrlShortenerEndpointUrlFunctionsCreateShortUrlGenerated:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Tool: Amazon.Lambda.Annotations
+      SyncedEvents:
+        - RootPost
+      SyncedEventProperties:
+        RootPost:
+          - Path
+          - Method
+    Properties:
+      Runtime: dotnet8
+      CodeUri: .
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - !Ref UrlShortenerConfigAccess
+        - !Ref UrlShortenerDynamoDBAccess
+      PackageType: Zip
+      Handler: UrlShortener
+      Environment:
+        Variables:
+          ANNOTATIONS_HANDLER: CreateShortUrl
+      Events:
+        RootPost:
+          Type: HttpApi
+          Properties:
+            Path: /Url
+            Method: POST
+  UrlShortenerEndpointUrlFunctionsGetOriginalUrlGenerated:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Tool: Amazon.Lambda.Annotations
+      SyncedEvents:
+        - RootGet
+      SyncedEventProperties:
+        RootGet:
+          - Path
+          - Method
+    Properties:
+      Runtime: dotnet8
+      CodeUri: .
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - !Ref UrlShortenerConfigAccess
+        - !Ref UrlShortenerDynamoDBAccess
+      PackageType: Zip
+      Handler: UrlShortener
+      Environment:
+        Variables:
+          ANNOTATIONS_HANDLER: GetOriginalUrl
+      Events:
+        RootGet:
+          Type: HttpApi
+          Properties:
+            Path: /Url/{slug}
+            Method: GET
+  UrlShortenerEndpointUrlFunctionsDeleteShortUrlGenerated:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Tool: Amazon.Lambda.Annotations
+      SyncedEvents:
+        - RootDelete
+      SyncedEventProperties:
+        RootDelete:
+          - Path
+          - Method
+    Properties:
+      Runtime: dotnet8
+      CodeUri: .
+      MemorySize: 512
+      Timeout: 30
+      Policies:
+        - !Ref UrlShortenerConfigAccess
+        - !Ref UrlShortenerDynamoDBAccess
+      PackageType: Zip
+      Handler: UrlShortener
+      Environment:
+        Variables:
+          ANNOTATIONS_HANDLER: DeleteShortUrl
+      Events:
+        RootDelete:
+          Type: HttpApi
+          Properties:
+            Path: /Url/{slug}
+            Method: DELETE
+Outputs:
+  ApiEndpoint:
+    Description: The URL Shortener API endpoint
+    Value: !Sub https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/
+  DynamoDBTableName:
+    Description: DynamoDB Table Name
+    Value: !Ref UrlShortenerTable
